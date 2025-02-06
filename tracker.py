@@ -1,32 +1,42 @@
 import socket
 import threading
 import os
+import json
 
 # requests
 ID_C = "id"
 SHARE_C = "share"
 INFO_C = "info"
-GET_C = "get"
 DISC_C = "disc"
 
 # responses
 DISC_SUC = "ds"
+SHARE_SUC = "ss"
+FILE_ERR = "fe"
 
 #  commands
 EXIT_C = "q"
 
 # log names
 IDS_LOG_FN = f"ids{os.getpid()}.txt"
+FILES_LOG_FN = f"files{os.getpid()}.txt"
 
 # error codes
-RP_NM = -1 # peer's address doesn't match id
-RP_IDNF = -2 # id not found
+IDADDRNM = -1 # peer's address doesn't match id
+IDNF = -2 # id not found
 
-lock = threading.Lock()
+# error messages
+IDADDRNM_M = "authentication failed, address doesn't match id"
+IDNF_M = "invalid id"
+NOTUNIQUE_M = "file name not unique"
+UNEXP_M = "unexpected error"
+
+ids_lock = threading.Lock()
+files_lock = threading.Lock()
 threads = []
 
 def getfreeid():
-    with lock:
+    with ids_lock:
         with open(IDS_LOG_FN, "r") as f:
             max = 0
             for l in f:
@@ -37,31 +47,75 @@ def getfreeid():
     return -1
     
 def allocid(id, addr):
-    with lock:
+    with ids_lock:
         with open(IDS_LOG_FN, "a") as f:
-            f.write(f"{id} {addr}")
+            f.write(f"{id} {addr}\n")
             return id
     return -1
 
 def remove_peer(id, reqaddr):
     lines = []
     found = False
-    with lock:
+    with ids_lock:
         with open(IDS_LOG_FN, "r") as f:
             for l in f:
                 curid, addr = l.split(maxsplit=1)
                 if curid == id:
                     found = True
                     if eval(addr) != reqaddr:
-                        return RP_NM
+                        return IDADDRNM
                 else:
                     lines.append(l)
         if not found:
-            return RP_IDNF
+            return IDNF
         with open(IDS_LOG_FN, "w") as f:
             f.writelines(lines)
+    flines = []
+    with files_lock:
+        with open(FILES_LOG_FN, "r") as f:
+            for l in f:
+                curid, addr, curfn = l.split('|', maxsplit=2)
+                if curid != id:
+                    flines.append(l)
+        with open(FILES_LOG_FN, "w") as f:
+            f.writelines(flines)        
     return 0
-    
+
+def isvalididaddr(id, reqaddr):
+    with ids_lock:
+        with open(IDS_LOG_FN, "r") as f:
+            for l in f:
+                curid, addr = l.split(maxsplit=1)
+                if curid == id:
+                    if eval(addr) != reqaddr:
+                        return IDADDRNM
+                    return 0
+    return IDNF
+
+def isfilenameunique(filename):
+    with files_lock:
+        with open(FILES_LOG_FN, "r") as f:
+            for l in f:
+                _, _, curfn = l.split('|', maxsplit=2)
+                if ''.join(curfn.split()) == ''.join(filename.split()):
+                    return -1
+    return 0
+
+def addfile(id, lis_addr, file):
+    with files_lock:
+        with open(FILES_LOG_FN, "a") as f:
+            f.write(f"{id}|{lis_addr}|{file}\n")
+
+def getlist(filename):
+    list = []
+    with files_lock:
+        with open(FILES_LOG_FN, "r") as f:
+            for l in f:
+                id, lis_addr, curfn = l.split('|', maxsplit=2)
+                if ''.join(curfn.split()) == ''.join(filename.split()):
+                    list.append(lis_addr)
+            return list
+    return None
 
 def process_req(r, s):
     command = r[0].decode().split()[0]
@@ -69,62 +123,78 @@ def process_req(r, s):
         id = getfreeid()
         if id == -1:
             print("[error] id allocation failed")
-            return
-        if allocid(id, r[1]) == -1:
+        elif allocid(id, r[1]) == -1:
             print("[error] peer addition failed")
-            return
-        s.sendto(id.encode(), r[1])
+        else:
+            s.sendto(id.encode(), r[1])
     elif command == SHARE_C:
-        pass
+        _, id, lis_port, file = r[0].decode().split()
+        val = isvalididaddr(id, r[1])
+        if val == IDNF:
+            s.sendto(IDNF_M.encode(), r[1])
+        elif val == IDADDRNM:
+            s.sendto(IDADDRNM.encode(), r[1])
+        elif val == 0:
+            if isfilenameunique(file) != 0:
+                s.sendto(NOTUNIQUE_M.encode(), r[1])
+            else:
+                addfile(id, (r[1][0], lis_port), file)
+                s.sendto(SHARE_SUC.encode(), r[1])
     elif command == INFO_C:
-        pass
-    elif command == GET_C:
-        pass
+        list = getlist(r[0].decode().split(maxsplit=1)[1])
+        if not list:
+            s.sendto(FILE_ERR.encode(), r[1])
+        else:
+            s.sendto(json.dumps(list).encode(), r[1])
     elif command == DISC_C:
         id = r[0].decode().split()[1]
         res = remove_peer(id, r[1])
-        if res == RP_IDNF:
-            print("[error] invalid id")
-        elif res == RP_NM:
-            print("[error] authentication failed, address doesn't match id")
+        if res == IDNF:
+            s.sendto(IDNF_M.encode(), r[1])
+        elif res == IDADDRNM:
+            s.sendto(IDADDRNM_M.encode(), r[1])
         elif res == 0:
             s.sendto(DISC_SUC.encode(), r[1])
         else:
-            print(f"[error] invalid return value from remove_peer {res}")
+            s.sendto(UNEXP_M.encode(), r[1])
     else:
-        print(f"[error] invalid request {r[0].decode()} from {r[1]}")
+        s.sendto(f"invalid request {r[0].decode()}".encode(), r[1])
 
 def handle_requests(ip, port):
     global sock
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((ip, int(port)))
-
+    sock.settimeout(1.0)
     while True:
         try:
             req = sock.recvfrom(1024)
             t = threading.Thread(target=process_req, args=(req, sock))
             threads.append(t)
             t.start()
+        except socket.timeout:
+            continue
         except:
             break
 
 def handle_cmd():
-    command = input()
-    type = command.split()[0]
-    if type == EXIT_C:
-        os.remove(IDS_LOG_FN)
-        sock.close()
-        for t in threads:
-            t.join()
-        #TODO tell peers the tracker has left (is this necessary?)
-        #TODO join threads
-    else:
-        print("[error] invalid command")
-
+    while True:
+        command = input()
+        type = command.split()[0]
+        if type == EXIT_C:
+            os.remove(IDS_LOG_FN)
+            os.remove(FILES_LOG_FN)
+            sock.close()
+            for t in threads:
+                t.join()
+            print("tracker disconnected")
+            return
+        else:
+            print("[error] invalid command")
 
 ip, port = input().split(':')
-f = open(IDS_LOG_FN, "w")
-f.close()
+open(IDS_LOG_FN, "w").close()
+open(FILES_LOG_FN, "w").close()
+
 t = threading.Thread(target=handle_requests, args=(ip, port))
 threads.append(t)
 t.start()

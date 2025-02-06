@@ -1,5 +1,4 @@
 p2t: id
-p2t: share [sender addr] [tracker addr] [file name]
-p2t: info [tracker addr] [file name]
+p2t: share [id] [listenning port] [file name]
+p2t: info [file name]
 p2t: disc [id]
-p2p: get [file name]
