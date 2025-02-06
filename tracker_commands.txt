@@ -1,0 +1,3 @@
+q
+all-logs
+file_logs [file name]
