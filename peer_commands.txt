@@ -1,3 +1,0 @@
-q
-get [file name]
-share [listenning port] [tracker addr] [file name]

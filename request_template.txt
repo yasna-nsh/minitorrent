@@ -1,4 +1,0 @@
-p2t: id
-p2t: share [id] [listenning port] [file name]
-p2t: info [file name]
-p2t: disc [id]

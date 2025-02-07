@@ -1,0 +1,19 @@
+*tracker commands*
+q
+logs request
+all-logs
+file_logs [file name]
+
+*peer commands*
+q
+get [listenning port] [tracker addr] [file name]
+share [listenning port] [tracker addr] [file name]
+logs request
+
+*packet data format*
+p2t: id
+p2t: share [id] [listenning port] [file name]
+p2t: info [id] [file name]
+p2t: rec [id] [listenning port] [file name]
+p2t: disc [id]
+p2p: size [filesize]
